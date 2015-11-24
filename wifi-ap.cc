@@ -49,8 +49,16 @@ class NodeMat: public NodeContainer
 
 int main (int argc, char *argv[])
 {
+    std::string traceFilePrefix;
+    std::string cacheSize;
+
     CommandLine cmd;
+    cmd.AddValue("tracePrefix", "Simulation trace files prefix", traceFilePrefix);
+    cmd.AddValue("cacheSize", "Cache size of access point nodes", cacheSize);
     cmd.Parse (argc, argv);
+
+    if (traceFilePrefix.empty () || cacheSize.empty ())
+        cmd.PrintHelp(std::cout);
 
     int i, j;
     int nStreets = 11;
@@ -63,10 +71,16 @@ int main (int argc, char *argv[])
             "../bonnmotion-2.1.3/man.ns_movements");
     ns2mobility.Install();
 
+    for (i = 0; i < nCars; i++)
+    {
+        Names::Add("car-" + boost::lexical_cast<std::string> (i), cars.Get (i));
+    }
+
     NodeMat aps = NodeMat(nStreets, nStreets);
     NodeContainer producers;
     producers.Create (1);
     Ptr<Node> producer = producers.Get (0);
+    Names::Add("producer-0", producer);
 
     MobilityHelper mobility;
     mobility.Install(aps);
@@ -139,7 +153,18 @@ int main (int argc, char *argv[])
 
     StackHelper ndnHelper;
     ndnHelper.SetDefaultRoutes (true);
-    ndnHelper.InstallAll ();
+
+    ndnHelper.SetOldContentStore("ns3::ndn::cs::Lru", "MaxSize", "10000");
+    ndnHelper.Install (producers);
+
+    if (cacheSize.compare ("0") == 0)
+        ndnHelper.SetOldContentStore("ns3::ndn::cs::Nocache");
+    else
+        ndnHelper.SetOldContentStore("ns3::ndn::cs::Lru", "MaxSize", cacheSize);
+    ndnHelper.Install (aps);
+
+    ndnHelper.SetOldContentStore("ns3::ndn::cs::Nocache");
+    ndnHelper.Install (cars);
 
     StrategyChoiceHelper::InstallAll ("/prefix", "/localhost/nfd/strategy/multicast");
 
@@ -149,9 +174,12 @@ int main (int argc, char *argv[])
     consumerHelper.Install (cars);
 
     AppHelper producerHelper = AppHelper ("ns3::ndn::Producer");
-    producerHelper.SetPrefix("/prefix");
-    producerHelper.SetAttribute("PayloadSize", StringValue("1024"));
-    producerHelper.Install(producer);
+    producerHelper.SetPrefix ("/prefix");
+    producerHelper.SetAttribute ("PayloadSize", StringValue("1024"));
+    producerHelper.Install (producer);
+
+    AppDelayTracer::Install (cars, traceFilePrefix + "app-trace.txt");
+    L3RateTracer::Install (NodeContainer(producers, cars), traceFilePrefix + "l3-trace");
 
     Simulator::Stop (Seconds (44.0));
     Simulator::Run ();
