@@ -3,6 +3,9 @@
 # pylint: disable=import-error
 # pylint: disable=wildcard-import
 # pylint: disable=invalid-name
+# pylint: disable=too-many-locals
+# pylint: disable=too-many-statements
+# pylint: disable=too-few-public-methods
 #
 # Copyright (c) 2011-2015  Regents of the University of California.
 #
@@ -23,34 +26,14 @@
 
 # ndn-simple.py
 
-from ns.core import Vector, Config, StringValue, CommandLine, Simulator, \
-        Seconds
+from ns.core import Vector, StringValue, CommandLine, Simulator, \
+        Seconds, DoubleValue, UintegerValue, StringValue, TimeValue
 from ns.network import NodeContainer, Node
 from ns.point_to_point import PointToPointHelper
 from ns.ndnSIM import ndn
 from ns.wifi import YansWifiPhyHelper, YansWifiChannelHelper, \
     NqosWifiMacHelper, WifiHelper, Ssid, SsidValue
-from ns.mobility import MobilityModel, MobilityHelper
-
-#
-# This scenario simulates a very simple network topology:
-#
-#
-#      +----------+     1Mbps      +--------+     1Mbps      +----------+
-#      | consumer | <------------> | router | <------------> | producer |
-#      +----------+         10ms   +--------+          10ms  +----------+
-#
-#
-# Consumer requests data from producer with frequency 10 interests per second
-# (interests contain constantly increasing sequence number).
-#
-# For every received interest, producer replies with a data packet, containing
-# 1024 bytes of virtual payload.
-#
-# To run scenario and see what is happening, use the following command:
-#
-#     NS_LOG=ndn.Consumer:ndn.Producer ./waf --pyrun=src/ndnSIM/examples/ndn-simple.py
-#
+from ns.mobility import MobilityModel, MobilityHelper, Ns2MobilityHelper
 
 def SetPosition(node, dpos):
     mob = node.GetObject(MobilityModel.GetTypeId())
@@ -75,42 +58,42 @@ def GridPositioning(spacing, nodeMat, offset=0):
             SetPosition(nodeMat.Get(i, j), pos)
 
 def main():
-    # Set default parameters for PointToPoint links and channels
-    Config.SetDefault("ns3::PointToPointNetDevice::DataRate", StringValue("10Mbps"))
-    Config.SetDefault("ns3::PointToPointChannel::Delay", StringValue("10ms"))
-    Config.SetDefault("ns3::DropTailQueue::MaxPackets", StringValue("20"))
-
-    # Read optional command-line parameters (e.g., enable visualizer with ./waf --pyrun=<> --visualize
     import sys
     cmd = CommandLine()
     cmd.Parse(sys.argv)
 
     nSteets = 11
     apSpacing = 100
-    nCars = 1
+    nCars = 2
 
     # Creating nodes
-    aps = NodeMat(nSteets, nSteets)
-
     cars = NodeContainer()
     cars.Create(nCars)
+
+    ns2mobility = Ns2MobilityHelper("../bonnmotion-2.1.3/man.ns_movements")
+    ns2mobility.Install()
+
+    aps = NodeMat(nSteets, nSteets)
 
     producer = Node()
 
     mobility = MobilityHelper()
-    mobility.InstallAll()
+    mobility.Install(aps.container)
+    mobility.Install(producer)
 
     SetPosition(producer, Vector((nSteets / 2) * apSpacing + (apSpacing / 2), -100, 0))
 
     GridPositioning(apSpacing, aps)
 
-    SetPosition(cars.Get(0), Vector(0, 20, 0))
-
     # Connecting nodes using two links
     p2p = PointToPointHelper()
 
+    p2p.SetChannelAttribute("Delay", TimeValue(Seconds(80e-3)))
+    p2p.SetDeviceAttribute("DataRate", StringValue("100Mbps"))
     p2p.Install(aps.Get(nSteets / 2, nSteets / 2), producer)
 
+    p2p.SetChannelAttribute("Delay", TimeValue(Seconds(3.3e-9 * apSpacing)))
+    p2p.SetDeviceAttribute("DataRate", StringValue("30Mbps"))
     for i in range(nSteets):
         for j in range(nSteets):
             router = aps.Get(i, j)
@@ -138,6 +121,9 @@ def main():
     wifiPhy = YansWifiPhyHelper.Default()
     wifiChannel = YansWifiChannelHelper.Default()
     wifiPhy.SetChannel(wifiChannel.Create())
+    wifiPhy.Set("TxPowerStart", DoubleValue(0))
+    wifiPhy.Set("TxPowerEnd", DoubleValue(0))
+    wifiPhy.Set("TxPowerLevels", UintegerValue(1))
     ssid = Ssid("wifi-default")
 
     wifiMac.SetType("ns3::ApWifiMac",
@@ -169,8 +155,10 @@ def main():
     producerHelper = ndn.AppHelper("ns3::ndn::Producer")
     # Producer will reply to all requests starting with /prefix
     producerHelper.SetPrefix("/prefix")
-    producerHelper.SetAttribute("PayloadSize", StringValue("1024"))
+    producerHelper.SetAttribute("PayloadSize", StringValue("10240"))
     producerHelper.Install(producer)
+
+    ndn.AppDelayTracer.Install(cars, "app-trace.txt")
 
     Simulator.Stop(Seconds(20.0))
 

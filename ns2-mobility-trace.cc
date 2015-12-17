@@ -77,7 +77,7 @@ int main(int argc, char* argv[]) {
 	std::string traceFile;
 
 	int nodeNum = 2;
-    int i;
+    int i, j;
 	double duration = 100;
     NodeContainer::Iterator nodei;
 
@@ -95,7 +95,6 @@ int main(int argc, char* argv[]) {
     YansWifiChannelHelper wifiChannel = YansWifiChannelHelper::Default ();
     wifiPhy.SetChannel (wifiChannel.Create ());
     Ssid ssid = Ssid ("wifi-default");
-    wifi.SetRemoteStationManager ("ns3::ArfWifiManager");
 
     // Install mobile stations
     MobilityHelper mobility;
@@ -105,7 +104,6 @@ int main(int argc, char* argv[]) {
 	nodes.Create(nodeNum);
 
 	ns2mobility.Install();
-    //mobility.Install(nodes);
 
     for (i = 0; i < nodeNum; i++)
     {
@@ -113,10 +111,7 @@ int main(int argc, char* argv[]) {
     }
 	
     wifiMac.SetType ("ns3::StaWifiMac",
-                     "Ssid", SsidValue (ssid),
-                     "ActiveProbing", BooleanValue (false));
-    wifiPhy.Set ("TxPowerStart", DoubleValue (0.0));
-    wifiPhy.Set ("TxPowerEnd", DoubleValue (0.0));
+                     "Ssid", SsidValue (ssid));
     wifi.Install (wifiPhy, wifiMac, nodes);
 
     // Install APs
@@ -129,17 +124,7 @@ int main(int argc, char* argv[]) {
 
     wifiMac.SetType ("ns3::ApWifiMac",
                      "Ssid", SsidValue (ssid));
-    wifiPhy.Set ("TxPowerStart", DoubleValue (0.0));
-    wifiPhy.Set ("TxPowerEnd", DoubleValue (0.0));
     wifi.Install (wifiPhy, wifiMac, aps);
-
-    // Install routers
-    int nRouters = 10 * 10;
-    NodeContainer routers;
-    routers.Create (nRouters);
-    mobility.Install(routers);
-
-    GridPosition(nRouters, 100, 50, routers);
 
     // Install producers
     PointToPointHelper pt;
@@ -155,46 +140,72 @@ int main(int argc, char* argv[]) {
     pos.y = 500;
     SetPosition(producers.Get (0), pos);
 
-    for (nodei = routers.Begin (); nodei != routers.End (); ++nodei)
+    // Install routers
+    NodeContainer routersL1;
+    NodeContainer routersL2;
+    NodeContainer apOnly;
+    Ptr<Node> router;
+
+    for (i = 0; i < 11; i++)
     {
-        pt.Install(*nodei, producers.Get (0));
+        for (j = 0; j < 11; j++)
+        {
+            if (i % 2 != 0 && j % 2 != 0)
+            {
+                router = aps.Get (i * 11 + j);
+                pt.Install (router, aps.Get ((i - 1) * 11 + j));
+                pt.Install (router, aps.Get (i * 11 + j - 1));
+                if (i == 9)
+                    pt.Install (router, aps.Get ((i + 1) * 11 + j));
+                if (j == 9)
+                    pt.Install (router, aps.Get (i * 11 + j + 1));
+            } else if (i % 2 == 0 && j % 2 != 0)
+            {
+                router = aps.Get (i * 11 + j);
+                pt.Install (router, aps.Get (i * 11 + j - 1));
+                if (j == 9)
+                    pt.Install (router, aps.Get (i * 11 + j + 1));
+                if (i != 0 && i != 10)
+                    pt.Install (router, aps.Get ((i - 1) * 11 + j));
+            } else if (i % 2 != 0 && j % 2 == 0 && j != 0 && j != 10)
+            {
+                router = aps.Get (i * 11 + j);
+                pt.Install (router, aps.Get (i * 11 + j - 1));
+            }
+
+            if (i % 2 != 0 && j % 2 != 0)
+            {
+                if (j == 1  || j == 9 || i == 1 || i == 9)
+                    routersL2.Add (aps.Get (i * 11 + j));
+                else if (j == 3 || j == 7 || i == 3 || i == 7)
+                    routersL1.Add (aps.Get (i * 11 + j));
+                else
+                    apOnly.Add (aps.Get (i * 11 + j));
+            } else 
+                apOnly.Add (aps.Get (i * 11 + j));
+        }
     }
 
-    Ptr<Node> router;
-    for (i = 0; i < nRouters; i++)
-    {
-        router = routers.Get(i);
-        pt.Install (router, aps.Get (i + i / 10));
-        pt.Install (router, aps.Get (i + i / 10 + 1));
-        pt.Install (router, aps.Get (i + i / 10 + 11));
-        pt.Install (router, aps.Get (i + i / 10 + 11 + 1));
-    }
+    pt.Install(producers.Get (0), aps.Get (5 * 11 + 5));
 
     // NDN setup
     ns3::ndn::StackHelper ndnHelper;
-    ndnHelper.SetOldContentStore("ns3::ndn::cs::Lru", "MaxSize", "1000");
     ndnHelper.SetDefaultRoutes(true);
-    ndnHelper.Install(nodes);
-    ndnHelper.Install(aps);
-    ndnHelper.Install(routers);
-    ndnHelper.Install(producers);
+    ndnHelper.InstallAll();
   
-    ns3::ndn::StrategyChoiceHelper::Install(routers, "/", "/localhost/nfd/strategy/best-route");
+    ns3::ndn::StrategyChoiceHelper::InstallAll("/", "/localhost/nfd/strategy/best-route");
   
-    ns3::ndn::AppHelper consumerHelper("ns3::ndn::ConsumerCbr");
-    consumerHelper.SetPrefix("/test/prefix");
-    consumerHelper.SetAttribute("Frequency", DoubleValue (10));
-    consumerHelper.Install(nodes);
+    ns3::ndn::AppHelper consumerHelper ("ns3::ndn::ConsumerCbr");
+    consumerHelper.SetPrefix ("/test/prefix");
+    consumerHelper.SetAttribute ("Frequency", DoubleValue (10));
+    consumerHelper.Install (nodes);
   
     ns3::ndn::AppHelper producerHelper("ns3::ndn::Producer");
-    producerHelper.SetPrefix("/");
-    producerHelper.SetAttribute("PayloadSize", StringValue ("1200"));
-    producerHelper.Install(producers);
+    producerHelper.SetPrefix ("/");
+    producerHelper.SetAttribute ("PayloadSize", StringValue ("1200"));
+    producerHelper.Install (producers.Get(0));
 
 	Simulator::Stop(Seconds(duration));
-
-    L3RateTracer::Install(NodeContainer(nodes, producers), "nodes-trace.txt", Seconds (0.5));
-    AppDelayTracer::Install(NodeContainer(nodes), "app-trace.txt");
 
 	Simulator::Run();
 	Simulator::Destroy();
